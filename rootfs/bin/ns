@@ -1,0 +1,32 @@
+#!/bin/sh
+REPO_URL="https://raw.githubusercontent.com/NickIBrody/nib-packages/main"
+
+install_pkg() {
+    PACKAGE=$1
+    echo "Installing $PACKAGE..."
+    
+    # Фикс DNS
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    
+    curl -L --cacert /etc/ssl/certs/ca-certificates.crt \
+         "$REPO_URL/$PACKAGE.tar.gz" -o "/tmp/$PACKAGE.tar.gz"
+    
+    if [ $? -eq 0 ]; then
+        echo "Extracting..."
+        tar -xzf "/tmp/$PACKAGE.tar.gz" -C /
+        echo "Done! $PACKAGE installed."
+        rm "/tmp/$PACKAGE.tar.gz"
+    else
+        echo "Error: Failed to download $PACKAGE."
+    fi
+}
+
+case "$1" in
+    install)
+        [ -z "$2" ] && echo "Usage: ns install <package>" || install_pkg "$2"
+        ;;
+    *)
+        echo "NIB System (ns) - Package Manager"
+        echo "Usage: ns install <package_name>"
+        ;;
+esac
