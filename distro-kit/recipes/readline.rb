@@ -1,0 +1,8 @@
+version "8.2"
+summary "Line editing library for shells and Python REPL"
+homepage "https://tiswww.case.edu/php/chet/readline/rltop.html"
+build_dep "gcc", "make", "ncurses"
+runtime_dep "ncurses"
+step "build shared library linked to ncursesw"
+step "install headers and pkg-config metadata"
+step "use as default line editor for Python and Ruby"

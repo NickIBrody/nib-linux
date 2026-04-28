@@ -1,0 +1,8 @@
+version "0.2.0"
+summary "Terminal-first web browser for the base distro"
+homepage "https://sr.ht/~bptato/chawan/"
+build_dep "gcc", "make", "pkg-config", "openssl", "ncurses"
+runtime_dep "openssl", "ca-certificates", "ncurses"
+step "fetch upstream source tarball"
+step "build against system TLS and terminal libraries"
+step "package binary, docs, and terminfo integration"

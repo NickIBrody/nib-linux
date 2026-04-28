@@ -1,0 +1,8 @@
+version "1.87.0"
+summary "Rust toolchain metapackage powered by rustup"
+homepage "https://www.rust-lang.org/"
+build_dep "curl", "ca-certificates"
+runtime_dep "rustup", "curl", "ca-certificates", "gcc"
+step "bootstrap via rustup-init for x86_64-unknown-linux-gnu"
+step "ship sensible default profile for distro developers"
+step "keep cargo home under /usr/lib/rustup or per-user setup"

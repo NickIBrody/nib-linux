@@ -1,0 +1,8 @@
+version "3.12.9"
+summary "CPython interpreter for the distro bootstrap"
+homepage "https://www.python.org/"
+build_dep "gcc", "make", "pkg-config", "openssl", "zlib", "libffi", "sqlite", "readline", "ncurses"
+runtime_dep "openssl", "zlib", "libffi", "sqlite", "readline", "ncurses", "ca-certificates"
+step "configure with shared library support and ensurepip"
+step "enable ssl, sqlite3, readline, bz2, lzma, and ctypes modules"
+step "install python3, pip, and venv support"

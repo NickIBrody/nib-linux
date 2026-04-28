@@ -1,0 +1,108 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require "open3"
+require_relative "lib/nib/recipe"
+
+ROOT = File.expand_path(__dir__)
+NS_CORE_DEFAULT = File.join(ROOT, "ns-core", "target", "release", "ns-core")
+NS_CORE = ENV.fetch("NS_CORE_BIN", NS_CORE_DEFAULT)
+
+def abort_usage(message)
+  warn message
+  exit 1
+end
+
+def run_core(*args)
+  unless File.exist?(NS_CORE)
+    abort_usage("ns-core not built: #{NS_CORE}. Run `make build` first.")
+  end
+
+  system(NS_CORE, *args)
+  exit($?.exitstatus || 1) unless $?.success?
+end
+
+def load_repo_index(path)
+  JSON.parse(File.read(File.join(path, "index.json")))
+end
+
+recipes = NIB::RecipeStore.load_dir(File.join(ROOT, "recipes"))
+
+command = ARGV.shift
+case command
+when "recipe"
+  sub = ARGV.shift
+  case sub
+  when "list"
+    recipes.each_value do |recipe|
+      puts "#{recipe.name.ljust(12)} #{recipe.version.ljust(10)} #{recipe.summary}"
+    end
+  when "show"
+    name = ARGV.shift or abort_usage("usage: ./ns recipe show <name>")
+    recipe = recipes[name] or abort_usage("recipe not found: #{name}")
+    puts "name: #{recipe.name}"
+    puts "version: #{recipe.version}"
+    puts "summary: #{recipe.summary}"
+    puts "homepage: #{recipe.homepage}"
+    puts "build_deps: #{recipe.build_deps.empty? ? '(none)' : recipe.build_deps.join(', ')}"
+    puts "runtime_deps: #{recipe.runtime_deps.empty? ? '(none)' : recipe.runtime_deps.join(', ')}"
+    puts "steps:"
+    recipe.steps.each { |step| puts "  - #{step}" }
+  else
+    abort_usage("usage: ./ns recipe [list|show]")
+  end
+when "repo"
+  sub = ARGV.shift
+  repo = ARGV.shift || File.join(ROOT, "examples", "repo")
+  case sub
+  when "index"
+    run_core("index", "--repo-dir", repo)
+  when "list"
+    run_core("list-repo", repo)
+  when "info"
+    name = ARGV.shift or abort_usage("usage: ./ns repo info <repo> <package>")
+    run_core("info", name, "--repo", repo)
+  else
+    abort_usage("usage: ./ns repo [index|list|info]")
+  end
+when "search"
+  repo = ARGV.shift || File.join(ROOT, "examples", "repo")
+  term = ARGV.shift.to_s.downcase
+  index = load_repo_index(repo)
+  index.fetch("packages").each do |pkg|
+    next if term != "" && !pkg.fetch("name").downcase.include?(term) && !pkg.fetch("summary").downcase.include?(term)
+
+    puts "#{pkg.fetch('name').ljust(12)} #{pkg.fetch('version')}-#{pkg.fetch('release')} #{pkg.fetch('summary')}"
+  end
+when "install"
+  name = ARGV.shift or abort_usage("usage: ./ns install <package> [--repo PATH] [--root PATH]")
+  repo = File.join(ROOT, "examples", "repo")
+  root = "/"
+  until ARGV.empty?
+    flag = ARGV.shift
+    case flag
+    when "--repo"
+      repo = ARGV.shift or abort_usage("--repo requires a value")
+    when "--root"
+      root = ARGV.shift or abort_usage("--root requires a value")
+    else
+      abort_usage("unknown flag: #{flag}")
+    end
+  end
+  run_core("install", name, "--repo", repo, "--root", root)
+when "installed"
+  root = ARGV[0] == "--root" ? (ARGV[1] || abort_usage("--root requires a value")) : "/"
+  run_core("list-installed", "--root", root)
+else
+  abort_usage(<<~USAGE)
+    usage:
+      ./ns recipe list
+      ./ns recipe show <name>
+      ./ns repo index [repo]
+      ./ns repo list [repo]
+      ./ns search [repo] [term]
+      ./ns install <package> [--repo PATH] [--root PATH]
+      ./ns installed [--root PATH]
+  USAGE
+end

@@ -1,6 +1,7 @@
 *.iso
 *.img
 *.qcow2
+*.raw
 *.cpio.gz
 nib-linux.iso
 disk.img
@@ -9,6 +10,8 @@ iso_root/boot/initrd.img
 iso_root/boot/vmlinuz
 iso_root/boot/rootfs.tar.gz
 sources/
+distro-kit/ns-core/target/
+distro-kit/examples/hello/
 rootfs/lib/firmware/*
 !rootfs/lib/firmware/.gitkeep
 rootfs/lib/modules/*

@@ -1,0 +1,8 @@
+version "3.49.1"
+summary "Embeddable SQL database used by Python standard library"
+homepage "https://sqlite.org/"
+build_dep "gcc", "make", "readline"
+runtime_dep "readline"
+step "build shared library and sqlite3 CLI"
+step "enable thread-safe mode"
+step "install headers and pkg-config metadata"

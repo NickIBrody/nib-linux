@@ -1,15 +1,17 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-BUILDDIR=/home/brody/nib-build
-ROOTFS=$BUILDDIR/rootfs_work
-ISO_ROOT=$BUILDDIR/iso_root
-KERNEL=$BUILDDIR/kernel/linux-6.12.27/arch/x86/boot/bzImage
+REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
+BUILDDIR=${BUILDDIR:-"$REPO_ROOT"}
+ROOTFS=${ROOTFS:-"$BUILDDIR/rootfs_work"}
+ISO_ROOT=${ISO_ROOT:-"$BUILDDIR/iso_root"}
+KERNEL=${KERNEL:-"$BUILDDIR/kernel/linux-6.12.27/arch/x86/boot/bzImage"}
+ISO_NAME=${ISO_NAME:-nib-linux.iso}
 
 echo "=== Checking kernel ==="
 if [ ! -f "$KERNEL" ]; then
     echo "ERROR: kernel not built yet at $KERNEL"
-    echo "Check: ps aux | grep make"
+    echo "Set KERNEL=/path/to/bzImage or build the kernel first."
     exit 1
 fi
 echo "Kernel: $(du -sh $KERNEL | cut -f1)"
@@ -34,13 +36,13 @@ echo "vmlinuz: $(du -sh $ISO_ROOT/boot/vmlinuz | cut -f1)"
 
 echo "=== Building ISO ==="
 cd "$BUILDDIR"
-grub-mkrescue -o nib-linux.iso "$ISO_ROOT" \
-    --modules="part_gpt part_msdos fat iso9660 linux normal chain all_video gfxterm" \
+grub-mkrescue -o "$ISO_NAME" "$ISO_ROOT" \
+    --modules="part_gpt part_msdos fat iso9660 linux normal chain" \
     2>&1 | grep -v "^$"
 
 echo ""
 echo "=== DONE ==="
-echo "ISO: $(du -sh $BUILDDIR/nib-linux.iso | cut -f1)  →  $BUILDDIR/nib-linux.iso"
+echo "ISO: $(du -sh "$BUILDDIR/$ISO_NAME" | cut -f1)  →  $BUILDDIR/$ISO_NAME"
 echo ""
-echo "Записать на USB:"
-echo "  sudo dd if=$BUILDDIR/nib-linux.iso of=/dev/sdX bs=4M status=progress"
+echo "Write to USB:"
+echo "  sudo dd if=$BUILDDIR/$ISO_NAME of=/dev/sdX bs=4M status=progress"

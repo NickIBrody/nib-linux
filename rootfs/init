@@ -1,54 +1,60 @@
 #!/bin/sh
 
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t tmpfs tmpfs /tmp
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
 mount -t tmpfs tmpfs /run 2>/dev/null
-mkdir -p /dev/pts /run/wpa_supplicant /var/run
+mkdir -p /dev/pts /run/wpa_supplicant /var/run /lib/firmware /lib/modules /mnt
 mount -t devpts devpts /dev/pts 2>/dev/null
 echo 0 > /proc/sys/kernel/printk 2>/dev/null
-mkdir -p /lib/firmware /lib/modules /mnt
-
-WIRED_UP=0
-for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(eth|en|em|eno|enp|ens)'); do
-    ip link set "$iface" up 2>/dev/null
-    if udhcpc -i "$iface" -q -t 3 -T 2 -s /usr/share/udhcpc/default.script 2>/dev/null; then
-        WIRED_UP=1
-        break
-    fi
-done
-
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-
-clear
-cat << 'BANNER'
-
-  ███╗   ██╗██╗██████╗     ██╗     ██╗███╗   ██╗██╗   ██╗██╗  ██╗
-  ████╗  ██║██║██╔══██╗    ██║     ██║████╗  ██║██║   ██║╚██╗██╔╝
-  ██╔██╗ ██║██║██████╔╝    ██║     ██║██╔██╗ ██║██║   ██║ ╚███╔╝
-  ██║╚██╗██║██║██╔══██╗    ██║     ██║██║╚██╗██║██║   ██║ ██╔██╗
-  ██║ ╚████║██║██████╔╝    ███████╗██║██║ ╚████║╚██████╔╝██╔╝ ██╗
-  ╚═╝  ╚═══╝╚═╝╚═════╝     ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝
-                                v1.0
-
-BANNER
+mdev -s 2>/dev/null
 
 ROOT_FS=$(awk '$2=="/" {print $3; exit}' /proc/mounts 2>/dev/null)
-case "$ROOT_FS" in rootfs|tmpfs|ramfs) LIVE=1 ;; *) LIVE=0 ;; esac
+case "$ROOT_FS" in
+    rootfs|tmpfs|ramfs) LIVE=1 ;;
+    *) LIVE=0 ;;
+esac
 
-echo "  Commands:"
-echo "    wifi-connect <SSID> [pass]   connect to WiFi"
-echo "    wifi-connect --scan          scan networks"
-[ "$LIVE" = "1" ] && echo "    nib-install                  install to disk"
-echo "    ns install <pkg>             install package"
+WIRED_UP=0
+if [ "$LIVE" = "1" ]; then
+    for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(eth|en|em|eno|enp|ens)'); do
+        ip link set "$iface" up 2>/dev/null
+        if udhcpc -i "$iface" -q -t 3 -T 2 -s /usr/share/udhcpc/default.script 2>/dev/null; then
+            WIRED_UP=1
+            break
+        fi
+    done
+
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+else
+    mount -a 2>/dev/null || true
+fi
+
+clear
+echo "NIB Linux v1.0"
 echo ""
 
-if [ "$WIRED_UP" = "1" ]; then
-    echo "  Network: connected (wired)"
+if [ "$LIVE" = "1" ]; then
+    echo "Mode: live installer"
+    echo "Commands:"
+    echo "  wifi-connect <SSID> [pass]   connect to WiFi"
+    echo "  wifi-connect --scan          scan networks"
+    echo "  nib-install                  install to disk"
+    echo "  ns install <pkg>             install package"
+    echo ""
+
+    if [ "$WIRED_UP" = "1" ]; then
+        echo "Network: connected (wired)"
+    else
+        echo "Network: not connected -- run wifi-connect"
+    fi
 else
-    echo "  Network: not connected -- run wifi-connect"
+    echo "Mode: installed system"
+    echo "Commands:"
+    echo "  ns install <pkg>             install package"
+    echo ""
 fi
 echo ""
 

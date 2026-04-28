@@ -1,0 +1,8 @@
+version "1.28.2"
+summary "Rust toolchain bootstrapper"
+homepage "https://rustup.rs/"
+build_dep "curl", "ca-certificates"
+runtime_dep "curl", "ca-certificates"
+step "download pinned rustup-init binary"
+step "verify upstream sha256 before packaging"
+step "install rustup and wrapper entry points"

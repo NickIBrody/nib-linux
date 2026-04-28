@@ -1,0 +1,8 @@
+version "3.5.0"
+summary "TLS and crypto library used by Python, curl, and package downloads"
+homepage "https://www.openssl.org/"
+build_dep "gcc", "make", "perl"
+runtime_dep "ca-certificates"
+step "configure shared build for linux-x86_64"
+step "install libssl, libcrypto, headers, and openssl CLI"
+step "keep certificate bundle outside the package"

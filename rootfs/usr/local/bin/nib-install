@@ -1,21 +1,85 @@
 #!/bin/sh
 
 export TERM=linux
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 TMPDIR=/tmp/nib-install
-mkdir -p $TMPDIR
+mkdir -p "$TMPDIR"
 
 die() {
-    dialog --title "Error" --msgbox "\n$1" 8 50
+    dialog --title "Error" --msgbox "\n$1" 8 60
     clear
     exit 1
 }
 
 cleanup() {
+    umount /mnt/iso 2>/dev/null || true
     umount /mnt/nibroot/boot/efi 2>/dev/null || true
     umount /mnt/nibroot 2>/dev/null || true
-    rm -rf $TMPDIR
+    rmdir /mnt/iso 2>/dev/null || true
+    rm -rf "$TMPDIR"
 }
 trap cleanup EXIT
+
+part_path() {
+    if [ -b "/dev/${DISK}p$1" ]; then
+        printf '/dev/%sp%s\n' "$DISK" "$1"
+    else
+        printf '/dev/%s%s\n' "$DISK" "$1"
+    fi
+}
+
+calc_layout() {
+    DISK_SECTORS=$(blockdev --getsz "/dev/$DISK" 2>/dev/null)
+    [ -n "$DISK_SECTORS" ] || return 1
+
+    BIOS_START=2048
+    BIOS_SIZE=4096
+    EFI_START=$((BIOS_START + BIOS_SIZE))
+
+    if [ "$DISK_SECTORS" -lt 2097152 ]; then
+        EFI_SIZE=262144
+    else
+        EFI_SIZE=1048576
+    fi
+
+    ROOT_START=$((EFI_START + EFI_SIZE))
+    ROOT_MIN_SIZE=262144
+    ROOT_SIZE=$((DISK_SECTORS - ROOT_START))
+
+    [ "$ROOT_SIZE" -gt "$ROOT_MIN_SIZE" ] || return 1
+    return 0
+}
+
+is_target_device() {
+    case "$1" in
+        "/dev/$DISK"|"/dev/$DISK"[0-9]*|"/dev/${DISK}p"[0-9]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+find_install_media() {
+    mkdir -p /mnt/iso
+    lsblk -rpn -o PATH,TYPE,FSTYPE 2>/dev/null > "$TMPDIR/media.list"
+
+    while read -r dev devtype fstype; do
+        [ -n "$dev" ] || continue
+        is_target_device "$dev" && continue
+
+        case "$devtype" in
+            disk|part|rom) ;;
+            *) continue ;;
+        esac
+
+        mount -o ro "$dev" /mnt/iso 2>/dev/null || continue
+        if [ -f /mnt/iso/boot/rootfs.tar.gz ] && [ -f /mnt/iso/boot/vmlinuz ]; then
+            echo "$dev"
+            return 0
+        fi
+        umount /mnt/iso 2>/dev/null || true
+    done < "$TMPDIR/media.list"
+
+    return 1
+}
 
 if [ "$(id -u)" != "0" ]; then
     dialog --title "NIB Linux Installer" --msgbox "\nThis installer must be run as root." 7 45
@@ -25,8 +89,8 @@ fi
 
 dialog --title "NIB Linux Installer" \
     --backtitle "NIB Linux 1.0" \
-    --yesno "\nWelcome to the NIB Linux installer.\n\nThis will install NIB Linux to a disk on this machine.\n\nAll data on the selected disk will be ERASED.\n\nContinue?" \
-    13 55
+    --yesno "\nWelcome to the NIB Linux installer.\n\nThis will install NIB Linux to a disk on this machine.\n\nThe installer now prepares the disk for both UEFI and Legacy BIOS boot.\n\nAll data on the selected disk will be ERASED.\n\nContinue?" \
+    15 60
 [ $? -eq 0 ] || { clear; exit 0; }
 
 DISK_LIST=""
@@ -58,83 +122,95 @@ DISK_MODEL=$(lsblk -d -n -o MODEL "/dev/$DISK" 2>/dev/null | sed 's/[[:space:]]*
 dialog --title "Confirm Installation" \
     --backtitle "NIB Linux 1.0" \
     --defaultno \
-    --yesno "\n  Disk:   /dev/$DISK\n  Size:   $DISK_SIZE\n  Model:  $DISK_MODEL\n\n  WARNING: ALL DATA WILL BE PERMANENTLY ERASED.\n\nAre you sure you want to continue?" \
-    13 55
+    --yesno "\n  Disk:   /dev/$DISK\n  Size:   $DISK_SIZE\n  Model:  $DISK_MODEL\n\n  Boot mode prepared: UEFI + Legacy BIOS\n\n  WARNING: ALL DATA WILL BE PERMANENTLY ERASED.\n\nAre you sure you want to continue?" \
+    15 60
 [ $? -eq 0 ] || { clear; exit 0; }
 
-if echo "$DISK" | grep -q "nvme"; then
-    EFI_PART="/dev/${DISK}p1"
-    ROOT_PART="/dev/${DISK}p2"
-else
-    EFI_PART="/dev/${DISK}1"
-    ROOT_PART="/dev/${DISK}2"
-fi
+BIOS_PART=$(part_path 1)
+EFI_PART=$(part_path 2)
+ROOT_PART=$(part_path 3)
 
-STEPS=7
+calc_layout || die "Target disk is too small for installation."
+
+STEPS=8
 step() {
     STEP_N=$1
     STEP_MSG=$2
     PCT=$(( STEP_N * 100 / STEPS ))
     echo "$PCT"
     echo "XXX"
-    echo "$PCT%  —  $STEP_MSG"
+    echo "$PCT%  -  $STEP_MSG"
     echo "XXX"
 }
 
 (
-step 1 "Partitioning disk..."
-sfdisk "/dev/$DISK" > /dev/null 2>&1 << 'SFDISK_END'
+step 1 "Partitioning disk for BIOS and UEFI boot..."
+wipefs -a "/dev/$DISK" > /dev/null 2>&1 || true
+sfdisk "/dev/$DISK" > /dev/null 2>&1 << SFDISK_END
 label: gpt
-start=2048,   size=1048576, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
-start=1050624,              type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="NIBLinux"
+start=$BIOS_START, size=$BIOS_SIZE, type=21686148-6449-6E6F-744E-656564454649, name="BIOSBOOT"
+start=$EFI_START,  size=$EFI_SIZE,  type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
+start=$ROOT_START,                 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="NIBLinux"
 SFDISK_END
 sleep 1
 partprobe "/dev/$DISK" 2>/dev/null || true
-sleep 1
+sleep 2
 
 step 2 "Formatting EFI partition..."
-mkfs.fat -F32 -n "NIBEFI" "$EFI_PART" > /dev/null 2>&1
+mkfs.fat -F32 -n "NIBEFI" "$EFI_PART" > /dev/null 2>&1 || {
+    echo "ERROR: Failed to format EFI partition $EFI_PART" > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
 
 step 3 "Formatting root partition..."
-mkfs.ext4 -L "NIBLinux" -F "$ROOT_PART" > /dev/null 2>&1
+mkfs.ext4 -L "NIBLinux" -F "$ROOT_PART" > /dev/null 2>&1 || {
+    echo "ERROR: Failed to format root partition $ROOT_PART" > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
 
-step 4 "Mounting partitions..."
+step 4 "Mounting target filesystem..."
 mkdir -p /mnt/nibroot
-mount "$ROOT_PART" /mnt/nibroot
+mount "$ROOT_PART" /mnt/nibroot || {
+    echo "ERROR: Failed to mount root partition $ROOT_PART" > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
 mkdir -p /mnt/nibroot/boot/efi
-mount "$EFI_PART" /mnt/nibroot/boot/efi
+mount "$EFI_PART" /mnt/nibroot/boot/efi || {
+    echo "ERROR: Failed to mount EFI partition $EFI_PART" > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
 
-step 5 "Extracting system files..."
-mkdir -p /mnt/iso
-ISO_DEV=""
-for dev in /dev/sr0 /dev/sr1 /dev/cdrom /dev/dvd; do
-    if mount -o ro "$dev" /mnt/iso 2>/dev/null; then
-        ISO_DEV="$dev"
-        break
-    fi
-done
-if [ -z "$ISO_DEV" ]; then
-    echo "ERROR: Cannot find/mount installation ISO" > $TMPDIR/error
-    umount /mnt/iso 2>/dev/null; rmdir /mnt/iso 2>/dev/null
-    echo "100"; exit 1
-fi
-if [ ! -f /mnt/iso/boot/rootfs.tar.gz ]; then
-    echo "ERROR: rootfs.tar.gz not found on ISO" > $TMPDIR/error
-    umount /mnt/iso 2>/dev/null; rmdir /mnt/iso 2>/dev/null
-    echo "100"; exit 1
-fi
-tar -xzf /mnt/iso/boot/rootfs.tar.gz -C /mnt/nibroot 2>/dev/null
-VMLINUZ_SRC=/mnt/iso/boot/vmlinuz
-umount /mnt/iso 2>/dev/null
-rmdir /mnt/iso 2>/dev/null
+step 5 "Locating installation media..."
+ISO_DEV=$(find_install_media)
+[ -n "$ISO_DEV" ] || {
+    echo "ERROR: Could not find the installation media. Boot the installer from the NIB ISO and try again." > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
 
-step 6 "Installing bootloader..."
+step 6 "Extracting system files..."
+tar -xzf /mnt/iso/boot/rootfs.tar.gz -C /mnt/nibroot 2>/dev/null || {
+    echo "ERROR: Failed to extract rootfs.tar.gz from $ISO_DEV" > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
+cp /mnt/iso/boot/vmlinuz /mnt/nibroot/boot/vmlinuz || {
+    echo "ERROR: Failed to copy kernel from installation media" > "$TMPDIR/error"
+    echo "100"
+    exit 1
+}
+umount /mnt/iso 2>/dev/null || true
+rmdir /mnt/iso 2>/dev/null || true
+
+step 7 "Installing bootloader..."
 mkdir -p /mnt/nibroot/boot/grub
 
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
-
-cp "$VMLINUZ_SRC" /mnt/nibroot/boot/vmlinuz 2>/dev/null || true
 
 cat > /mnt/nibroot/boot/grub/grub.cfg << GRUBEOF
 set default=0
@@ -145,43 +221,55 @@ insmod part_msdos
 insmod fat
 insmod ext2
 insmod linux
-insmod all_video
 
 terminal_input console
 terminal_output console
 
 menuentry "NIB Linux" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw quiet console=tty0
+    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait quiet init=/init console=tty0
 }
 
 menuentry "NIB Linux (nomodeset)" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw quiet nomodeset console=tty0
+    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait quiet nomodeset init=/init console=tty0
 }
 
-menuentry "NIB Linux (recovery)" {
+menuentry "NIB Linux (safe mode)" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw console=tty0 init=/bin/sh
+    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait init=/bin/sh console=tty0
 }
 GRUBEOF
 
 cat > /mnt/nibroot/etc/fstab << FSTABEOF
 UUID=$ROOT_UUID  /         ext4  defaults,noatime  0 1
 UUID=$EFI_UUID   /boot/efi vfat  defaults          0 2
-tmpfs            /tmp      tmpfs defaults,nosuid    0 0
+tmpfs            /tmp      tmpfs defaults,nosuid   0 0
+tmpfs            /run      tmpfs defaults,nosuid   0 0
 FSTABEOF
+
+UEFI_OK=0
+BIOS_OK=0
+
+mkdir -p /mnt/nibroot/boot/efi/EFI
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
 
 grub-install --target=x86_64-efi \
     --efi-directory=/mnt/nibroot/boot/efi \
     --boot-directory=/mnt/nibroot/boot \
-    --removable "/dev/$DISK" > /dev/null 2>&1 || true
+    --removable --no-nvram "/dev/$DISK" > "$TMPDIR/grub-efi.log" 2>&1 && UEFI_OK=1
 
 grub-install --target=i386-pc \
     --boot-directory=/mnt/nibroot/boot \
-    "/dev/$DISK" > /dev/null 2>&1 || true
+    "/dev/$DISK" > "$TMPDIR/grub-bios.log" 2>&1 && BIOS_OK=1
 
-step 7 "Finalizing..."
+if [ "$UEFI_OK" -ne 1 ] && [ "$BIOS_OK" -ne 1 ]; then
+    echo "ERROR: GRUB installation failed for both UEFI and BIOS." > "$TMPDIR/error"
+    echo "100"
+    exit 1
+fi
+
+step 8 "Finalizing installation..."
 rm -f /mnt/nibroot/usr/local/bin/nib-install /mnt/nibroot/bin/nib-install 2>/dev/null || true
 sync
 umount /mnt/nibroot/boot/efi 2>/dev/null || true
@@ -192,15 +280,19 @@ echo "100"
     --title "Installing NIB Linux" \
     --backtitle "NIB Linux 1.0" \
     --gauge "\nInstalling NIB Linux to /dev/$DISK...\n" \
-    10 55 0
+    10 60 0
 
-if [ -f $TMPDIR/error ]; then
-    die "$(cat $TMPDIR/error)"
+if [ -f "$TMPDIR/error" ]; then
+    EXTRA=""
+    if [ -s "$TMPDIR/grub-efi.log" ] || [ -s "$TMPDIR/grub-bios.log" ]; then
+        EXTRA="\n\nEFI GRUB log: $TMPDIR/grub-efi.log\nBIOS GRUB log: $TMPDIR/grub-bios.log"
+    fi
+    die "$(cat "$TMPDIR/error")$EXTRA"
 fi
 
 dialog --title "Installation Complete" \
     --backtitle "NIB Linux 1.0" \
-    --msgbox "\nNIB Linux has been successfully installed to /dev/$DISK.\n\nRemove the installation media and reboot to start your new system." \
-    11 55
+    --msgbox "\nNIB Linux has been installed to /dev/$DISK.\n\nSupported boot paths prepared:\n- UEFI removable boot\n- Legacy BIOS boot\n\nRemove the installation media and reboot." \
+    13 60
 
 clear

@@ -1,0 +1,8 @@
+version "8.13.0"
+summary "Transfer tool needed for bootstrap and Rust installers"
+homepage "https://curl.se/"
+build_dep "gcc", "make", "pkg-config", "openssl", "zlib"
+runtime_dep "openssl", "zlib", "ca-certificates"
+step "configure with OpenSSL backend"
+step "enable IPv6 and HTTP/2 later when nghttp2 exists"
+step "package curl and libcurl for developer tooling"
