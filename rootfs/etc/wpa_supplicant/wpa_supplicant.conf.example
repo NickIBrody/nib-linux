@@ -1,0 +1,14 @@
+ctrl_interface=/run/wpa_supplicant
+update_config=1
+
+# Open network
+# network={
+#     ssid="MyNetwork"
+#     key_mgmt=NONE
+# }
+
+# WPA2 network
+# network={
+#     ssid="MyNetwork"
+#     psk="mypassword"
+# }

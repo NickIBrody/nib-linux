@@ -1,0 +1,80 @@
+#!/bin/sh
+set -e
+
+usage() {
+    echo "Usage: wifi-connect <SSID> [password]"
+    echo "       wifi-connect --scan"
+    echo "       wifi-connect --list"
+    exit 1
+}
+
+scan_wifi() {
+    WLAN=""
+    for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(wlan|wlp|wlx)'); do
+        ip link set "$iface" up 2>/dev/null
+        WLAN="$iface"
+        break
+    done
+
+    if [ -z "$WLAN" ]; then
+        echo "No WiFi interface found"
+        exit 1
+    fi
+
+    echo "Scanning on $WLAN..."
+    iw dev "$WLAN" scan 2>/dev/null | grep -E 'SSID:|signal:' | sed 's/.*SSID: /  /;s/.*signal: /  Signal: /'
+}
+
+connect_wifi() {
+    SSID="$1"
+    PASS="$2"
+
+    WLAN=""
+    for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(wlan|wlp|wlx)'); do
+        ip link set "$iface" up 2>/dev/null
+        WLAN="$iface"
+        break
+    done
+
+    if [ -z "$WLAN" ]; then
+        echo "No WiFi interface found. Make sure WiFi is enabled."
+        exit 1
+    fi
+
+    echo "Connecting to '$SSID' on $WLAN..."
+
+    mkdir -p /etc/wpa_supplicant
+
+    if [ -n "$PASS" ]; then
+        wpa_passphrase "$SSID" "$PASS" > /etc/wpa_supplicant/wpa_supplicant.conf
+    else
+        cat > /etc/wpa_supplicant/wpa_supplicant.conf << EOF
+ctrl_interface=/run/wpa_supplicant
+update_config=1
+network={
+    ssid="$SSID"
+    key_mgmt=NONE
+}
+EOF
+    fi
+
+    mkdir -p /run/wpa_supplicant
+    killall wpa_supplicant 2>/dev/null || true
+    wpa_supplicant -B -i "$WLAN" -c /etc/wpa_supplicant/wpa_supplicant.conf
+
+    echo "Waiting for association..."
+    sleep 3
+
+    if udhcpc -i "$WLAN" -q -t 5 -T 3 -s /usr/share/udhcpc/default.script; then
+        echo "Connected! IP assigned."
+    else
+        echo "Associated but DHCP failed. Try: udhcpc -i $WLAN"
+    fi
+}
+
+case "$1" in
+    --scan|-s) scan_wifi ;;
+    --list|-l) scan_wifi ;;
+    "") usage ;;
+    *) connect_wifi "$1" "$2" ;;
+esac
