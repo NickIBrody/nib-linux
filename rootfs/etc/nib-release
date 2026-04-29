@@ -1,5 +1,5 @@
-NAME="NIB Linux"
+NAME="Forge Linux"
 VERSION="1.0"
-ID=nib
-PRETTY_NAME="NIB Linux 1.0 (Monster Edition)"
+ID=forge
+PRETTY_NAME="Forge Linux 1.0 (Monster Edition)"
 HOME_URL="https://github.com/NickIBrody/nib-linux"

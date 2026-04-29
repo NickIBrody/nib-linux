@@ -33,7 +33,7 @@ else
 fi
 
 clear
-echo "NIB Linux v1.0"
+echo "Forge Linux v1.0"
 echo ""
 
 if [ "$LIVE" = "1" ]; then

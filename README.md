@@ -1,6 +1,6 @@
-# NIB Linux
+# Forge Linux
 
-NIB Linux is a custom Linux distribution project built around a small live ISO, a shell-driven initramfs environment, and a simple disk installer for real hardware.
+Forge Linux is a custom Linux distribution project built around a small live ISO, a shell-driven initramfs environment, and a simple disk installer for real hardware.
 
 Current state:
 

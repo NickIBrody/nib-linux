@@ -82,14 +82,14 @@ find_install_media() {
 }
 
 if [ "$(id -u)" != "0" ]; then
-    dialog --title "NIB Linux Installer" --msgbox "\nThis installer must be run as root." 7 45
+    dialog --title "Forge Linux Installer" --msgbox "\nThis installer must be run as root." 7 47
     clear
     exit 1
 fi
 
-dialog --title "NIB Linux Installer" \
-    --backtitle "NIB Linux 1.0" \
-    --yesno "\nWelcome to the NIB Linux installer.\n\nThis will install NIB Linux to a disk on this machine.\n\nThe installer now prepares the disk for both UEFI and Legacy BIOS boot.\n\nAll data on the selected disk will be ERASED.\n\nContinue?" \
+dialog --title "Forge Linux Installer" \
+    --backtitle "Forge Linux 1.0" \
+    --yesno "\nWelcome to the Forge Linux installer.\n\nThis will install Forge Linux to a disk on this machine.\n\nThe installer now prepares the disk for both UEFI and Legacy BIOS boot.\n\nAll data on the selected disk will be ERASED.\n\nContinue?" \
     15 60
 [ $? -eq 0 ] || { clear; exit 0; }
 
@@ -107,8 +107,8 @@ fi
 
 DISK=$(eval dialog \
     --title \"Select Target Disk\" \
-    --backtitle \"NIB Linux 1.0\" \
-    --menu \"\nChoose the disk to install NIB Linux on.\nAll data will be erased.\" \
+    --backtitle \"Forge Linux 1.0\" \
+    --menu \"\nChoose the disk to install Forge Linux on.\nAll data will be erased.\" \
     16 60 6 \
     $DISK_LIST \
     3>&1 1>&2 2>&3)
@@ -120,7 +120,7 @@ DISK_SIZE=$(lsblk -d -n -o SIZE "/dev/$DISK" 2>/dev/null)
 DISK_MODEL=$(lsblk -d -n -o MODEL "/dev/$DISK" 2>/dev/null | sed 's/[[:space:]]*$//')
 
 dialog --title "Confirm Installation" \
-    --backtitle "NIB Linux 1.0" \
+    --backtitle "Forge Linux 1.0" \
     --defaultno \
     --yesno "\n  Disk:   /dev/$DISK\n  Size:   $DISK_SIZE\n  Model:  $DISK_MODEL\n\n  Boot mode prepared: UEFI + Legacy BIOS\n\n  WARNING: ALL DATA WILL BE PERMANENTLY ERASED.\n\nAre you sure you want to continue?" \
     15 60
@@ -150,21 +150,21 @@ sfdisk "/dev/$DISK" > /dev/null 2>&1 << SFDISK_END
 label: gpt
 start=$BIOS_START, size=$BIOS_SIZE, type=21686148-6449-6E6F-744E-656564454649, name="BIOSBOOT"
 start=$EFI_START,  size=$EFI_SIZE,  type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
-start=$ROOT_START,                 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="NIBLinux"
+start=$ROOT_START,                 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="ForgeLinux"
 SFDISK_END
 sleep 1
 partprobe "/dev/$DISK" 2>/dev/null || true
 sleep 2
 
 step 2 "Formatting EFI partition..."
-mkfs.fat -F32 -n "NIBEFI" "$EFI_PART" > /dev/null 2>&1 || {
+mkfs.fat -F32 -n "FORGEEFI" "$EFI_PART" > /dev/null 2>&1 || {
     echo "ERROR: Failed to format EFI partition $EFI_PART" > "$TMPDIR/error"
     echo "100"
     exit 1
 }
 
 step 3 "Formatting root partition..."
-mkfs.ext4 -L "NIBLinux" -F "$ROOT_PART" > /dev/null 2>&1 || {
+mkfs.ext4 -L "ForgeLinux" -F "$ROOT_PART" > /dev/null 2>&1 || {
     echo "ERROR: Failed to format root partition $ROOT_PART" > "$TMPDIR/error"
     echo "100"
     exit 1
@@ -187,7 +187,7 @@ mount "$EFI_PART" /mnt/nibroot/boot/efi || {
 step 5 "Locating installation media..."
 ISO_DEV=$(find_install_media)
 [ -n "$ISO_DEV" ] || {
-    echo "ERROR: Could not find the installation media. Boot the installer from the NIB ISO and try again." > "$TMPDIR/error"
+    echo "ERROR: Could not find the installation media. Boot the installer from the Forge Linux ISO and try again." > "$TMPDIR/error"
     echo "100"
     exit 1
 }
@@ -225,17 +225,17 @@ insmod linux
 terminal_input console
 terminal_output console
 
-menuentry "NIB Linux" {
+menuentry "Forge Linux" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
     linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait quiet init=/init console=tty0
 }
 
-menuentry "NIB Linux (nomodeset)" {
+menuentry "Forge Linux (nomodeset)" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
     linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait quiet nomodeset init=/init console=tty0
 }
 
-menuentry "NIB Linux (safe mode)" {
+menuentry "Forge Linux (safe mode)" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
     linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait init=/bin/sh console=tty0
 }
@@ -277,9 +277,9 @@ umount /mnt/nibroot 2>/dev/null || true
 echo "100"
 
 ) | dialog \
-    --title "Installing NIB Linux" \
-    --backtitle "NIB Linux 1.0" \
-    --gauge "\nInstalling NIB Linux to /dev/$DISK...\n" \
+    --title "Installing Forge Linux" \
+    --backtitle "Forge Linux 1.0" \
+    --gauge "\nInstalling Forge Linux to /dev/$DISK...\n" \
     10 60 0
 
 if [ -f "$TMPDIR/error" ]; then
@@ -291,8 +291,8 @@ if [ -f "$TMPDIR/error" ]; then
 fi
 
 dialog --title "Installation Complete" \
-    --backtitle "NIB Linux 1.0" \
-    --msgbox "\nNIB Linux has been installed to /dev/$DISK.\n\nSupported boot paths prepared:\n- UEFI removable boot\n- Legacy BIOS boot\n\nRemove the installation media and reboot." \
+    --backtitle "Forge Linux 1.0" \
+    --msgbox "\nForge Linux has been installed to /dev/$DISK.\n\nSupported boot paths prepared:\n- UEFI removable boot\n- Legacy BIOS boot\n\nRemove the installation media and reboot." \
     13 60
 
 clear
