@@ -1,32 +1,135 @@
 #!/bin/sh
+
 REPO_URL="https://raw.githubusercontent.com/NickIBrody/nib-packages/main"
+DB_ROOT="/var/lib/ns/packages"
+
+reverse_file() {
+    awk '{ lines[NR] = $0 } END { for (i = NR; i > 0; i--) print lines[i] }' "$1"
+}
+
+pkg_dir() {
+    printf "%s/%s" "$DB_ROOT" "$1"
+}
+
+ensure_db() {
+    mkdir -p "$DB_ROOT"
+}
+
+fix_dns() {
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+}
+
+download_pkg() {
+    PACKAGE=$1
+    ARCHIVE="/tmp/$PACKAGE.tar.gz"
+
+    curl -L --cacert /etc/ssl/certs/ca-certificates.crt \
+        "$REPO_URL/$PACKAGE.tar.gz" -o "$ARCHIVE"
+}
+
+write_metadata() {
+    PACKAGE=$1
+    ARCHIVE=$2
+    PKG_DIR=$(pkg_dir "$PACKAGE")
+
+    rm -rf "$PKG_DIR"
+    mkdir -p "$PKG_DIR"
+
+    tar -tzf "$ARCHIVE" | while IFS= read -r entry; do
+        path=${entry#./}
+        [ -n "$path" ] || continue
+        [ "$path" = "." ] && continue
+
+        case "$entry" in
+            */)
+                printf "%s\n" "${path%/}" >> "$PKG_DIR/dirs.list"
+                ;;
+            *)
+                printf "%s\n" "$path" >> "$PKG_DIR/files.list"
+                ;;
+        esac
+    done
+
+    : > "$PKG_DIR/package.info"
+    printf "name=%s\n" "$PACKAGE" >> "$PKG_DIR/package.info"
+    printf "repo=%s\n" "$REPO_URL/$PACKAGE.tar.gz" >> "$PKG_DIR/package.info"
+}
 
 install_pkg() {
     PACKAGE=$1
+    ARCHIVE="/tmp/$PACKAGE.tar.gz"
+
     echo "Installing $PACKAGE..."
-    
-    # Фикс DNS
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    
-    curl -L --cacert /etc/ssl/certs/ca-certificates.crt \
-         "$REPO_URL/$PACKAGE.tar.gz" -o "/tmp/$PACKAGE.tar.gz"
-    
-    if [ $? -eq 0 ]; then
-        echo "Extracting..."
-        tar -xzf "/tmp/$PACKAGE.tar.gz" -C /
-        echo "Done! $PACKAGE installed."
-        rm "/tmp/$PACKAGE.tar.gz"
-    else
+
+    ensure_db
+    fix_dns
+
+    if ! download_pkg "$PACKAGE"; then
         echo "Error: Failed to download $PACKAGE."
+        rm -f "$ARCHIVE"
+        return 1
     fi
+
+    if ! tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+        echo "Error: Invalid package archive for $PACKAGE."
+        rm -f "$ARCHIVE"
+        return 1
+    fi
+
+    echo "Extracting..."
+    if ! tar -xzf "$ARCHIVE" -C /; then
+        echo "Error: Failed to extract $PACKAGE."
+        rm -f "$ARCHIVE"
+        return 1
+    fi
+
+    write_metadata "$PACKAGE" "$ARCHIVE"
+    rm -f "$ARCHIVE"
+    echo "Done! $PACKAGE installed."
+}
+
+remove_pkg() {
+    PACKAGE=$1
+    PKG_DIR=$(pkg_dir "$PACKAGE")
+    FILES="$PKG_DIR/files.list"
+    DIRS="$PKG_DIR/dirs.list"
+
+    if [ ! -d "$PKG_DIR" ]; then
+        echo "Error: No installation metadata for $PACKAGE."
+        echo "Only packages installed with the newer ns metadata can be removed safely."
+        return 1
+    fi
+
+    echo "Removing $PACKAGE..."
+
+    if [ -f "$FILES" ]; then
+        reverse_file "$FILES" | while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            rm -f "/$path"
+        done
+    fi
+
+    if [ -f "$DIRS" ]; then
+        reverse_file "$DIRS" | while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            rmdir "/$path" 2>/dev/null || true
+        done
+    fi
+
+    rm -rf "$PKG_DIR"
+    echo "Done! $PACKAGE removed."
 }
 
 case "$1" in
     install)
         [ -z "$2" ] && echo "Usage: ns install <package>" || install_pkg "$2"
         ;;
+    remove)
+        [ -z "$2" ] && echo "Usage: ns remove <package>" || remove_pkg "$2"
+        ;;
     *)
         echo "Forge System (ns) - Package Manager"
         echo "Usage: ns install <package_name>"
+        echo "       ns remove <package_name>"
         ;;
 esac
