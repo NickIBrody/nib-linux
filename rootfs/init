@@ -1,28 +1,85 @@
 #!/bin/sh
+set -u
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-mount -t devtmpfs devtmpfs /dev 2>/dev/null
-mount -t proc proc /proc 2>/dev/null
-mount -t sysfs sysfs /sys 2>/dev/null
-mount -t tmpfs tmpfs /tmp 2>/dev/null
-mount -t tmpfs tmpfs /run 2>/dev/null
-mkdir -p /dev/pts /run/wpa_supplicant /var/run /lib/firmware /lib/modules /mnt
-mount -t devpts devpts /dev/pts 2>/dev/null
-echo 0 > /proc/sys/kernel/printk 2>/dev/null
-mdev -s 2>/dev/null
+CMDLINE="$(cat /proc/cmdline 2>/dev/null)"
+NIB_DEBUG=0
+NIB_RESCUE=0
+case " $CMDLINE " in
+    *" nib.debug=1 "*) NIB_DEBUG=1 ;;
+esac
+case " $CMDLINE " in
+    *" nib.rescue=1 "*) NIB_RESCUE=1 ;;
+esac
 
-ROOT_FS=$(awk '$2=="/" {print $3; exit}' /proc/mounts 2>/dev/null)
+panic_shell() {
+    echo
+    echo "[nib-init] boot failed, dropping to shell"
+    exec /bin/sh -i </dev/console >/dev/console 2>&1
+}
+
+spawn_tty_shell() {
+    tty_dev="$1"
+    if [ ! -c "$tty_dev" ]; then
+        return 1
+    fi
+
+    if command -v cttyhack >/dev/null 2>&1; then
+        setsid cttyhack /bin/sh -i <"$tty_dev" >"$tty_dev" 2>&1
+    else
+        setsid /bin/sh -i <"$tty_dev" >"$tty_dev" 2>&1
+    fi
+}
+
+log() {
+    echo "[nib-init] $*"
+}
+
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mkdir -p /dev
+exec </dev/console >/dev/console 2>&1
+
+mount -t proc proc /proc 2>/dev/null || panic_shell
+mount -t sysfs sysfs /sys 2>/dev/null || panic_shell
+mount -t tmpfs tmpfs /tmp 2>/dev/null || panic_shell
+mount -t tmpfs tmpfs /run 2>/dev/null || panic_shell
+mkdir -p /dev/pts /run/wpa_supplicant /var/run /lib/firmware /lib/modules /mnt
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+log "cmdline: $CMDLINE"
+log "mounting early filesystems"
+
+if command -v mdev >/dev/null 2>&1; then
+    if [ -e /proc/sys/kernel/hotplug ]; then
+        echo /bin/mdev > /proc/sys/kernel/hotplug 2>/dev/null || true
+    fi
+    mdev -s 2>/dev/null || true
+fi
+
+ROOT_FS="$(awk '$2=="/" {print $3; exit}' /proc/mounts 2>/dev/null)"
 case "$ROOT_FS" in
     rootfs|tmpfs|ramfs) LIVE=1 ;;
     *) LIVE=0 ;;
 esac
 
+log "root filesystem: ${ROOT_FS:-unknown}"
+if [ "$LIVE" = "1" ]; then
+    log "mode: live installer"
+else
+    log "mode: installed system"
+fi
+
+if [ "$NIB_RESCUE" = "1" ]; then
+    log "rescue mode requested"
+    exec /bin/sh -i </dev/console >/dev/console 2>&1
+fi
+
 WIRED_UP=0
 if [ "$LIVE" = "1" ]; then
     for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(eth|en|em|eno|enp|ens)'); do
-        ip link set "$iface" up 2>/dev/null
-        if udhcpc -i "$iface" -q -t 3 -T 2 -s /usr/share/udhcpc/default.script 2>/dev/null; then
+        log "bringing up $iface"
+        ip link set "$iface" up 2>/dev/null || true
+        if udhcpc -i "$iface" -n -q -t 2 -T 2 -s /usr/share/udhcpc/default.script 2>/dev/null; then
             WIRED_UP=1
             break
         fi
@@ -31,12 +88,13 @@ if [ "$LIVE" = "1" ]; then
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
     echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 else
+    mount -o remount,rw / 2>/dev/null || true
     mount -a 2>/dev/null || true
 fi
 
-clear
+echo
 echo "Forge Linux v1.0"
-echo ""
+echo
 
 if [ "$LIVE" = "1" ]; then
     echo "Mode: live installer"
@@ -45,7 +103,7 @@ if [ "$LIVE" = "1" ]; then
     echo "  wifi-connect --scan          scan networks"
     echo "  nib-install                  install to disk"
     echo "  ns install <pkg>             install package"
-    echo ""
+    echo
 
     if [ "$WIRED_UP" = "1" ]; then
         echo "Network: connected (wired)"
@@ -56,8 +114,28 @@ else
     echo "Mode: installed system"
     echo "Commands:"
     echo "  ns install <pkg>             install package"
-    echo ""
 fi
-echo ""
 
-exec setsid cttyhack /bin/sh
+echo
+if [ "$NIB_DEBUG" = "1" ]; then
+    echo "Block devices:"
+    ls /dev/sd* /dev/nvme* /dev/vd* 2>/dev/null || true
+    echo
+    echo "Network devices:"
+    ls /sys/class/net 2>/dev/null || true
+    echo
+fi
+
+if [ "$LIVE" = "1" ]; then
+    log "starting live shells on tty2-tty4"
+    for tty in 2 3 4; do
+        spawn_tty_shell "/dev/tty$tty" &
+    done
+    exec /bin/sh -i </dev/console >/dev/console 2>&1
+else
+    log "starting virtual consoles on tty1-tty4"
+    for tty in 2 3 4; do
+        setsid /sbin/getty -L 115200 "tty$tty" vt100 </dev/null >/dev/null 2>&1 &
+    done
+    exec setsid /sbin/getty -L 115200 tty1 vt100
+fi
