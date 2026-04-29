@@ -22,3 +22,9 @@ rootfs/usr/lib/
 rootfs/usr/local/sbin/
 rootfs/run/*
 !rootfs/run/.gitkeep
+.calamares-bootstrap/
+kernel/
+wpa/*.tar.gz
+wpa/*.deb
+iso_root/
+build_iso.sh

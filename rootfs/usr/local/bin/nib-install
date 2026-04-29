@@ -5,8 +5,19 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 TMPDIR=/tmp/nib-install
 mkdir -p "$TMPDIR"
 
+INSTALL_MODE=""
+DISK=""
+ROOT_PART=""
+EFI_PART=""
+BOOT_DISK=""
+FORMAT_ROOT=1
+ROOT_FS_TYPE="ext4"
+HOSTNAME_VALUE="forge"
+USERNAME_VALUE="forge"
+PASSWORD_VALUE=""
+
 die() {
-    dialog --title "Error" --msgbox "\n$1" 8 60
+    dialog --title "Error" --msgbox "\n$1" 10 70
     clear
     exit 1
 }
@@ -63,7 +74,7 @@ find_install_media() {
 
     while read -r dev devtype fstype; do
         [ -n "$dev" ] || continue
-        is_target_device "$dev" && continue
+        [ -n "$DISK" ] && is_target_device "$dev" && continue
 
         case "$devtype" in
             disk|part|rom) ;;
@@ -81,6 +92,282 @@ find_install_media() {
     return 1
 }
 
+select_disk() {
+    title="$1"
+    prompt="$2"
+    menu=""
+
+    for dev in $(lsblk -d -n -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+        size=$(lsblk -d -n -o SIZE "/dev/$dev" 2>/dev/null)
+        model=$(lsblk -d -n -o MODEL "/dev/$dev" 2>/dev/null | sed 's/[[:space:]]*$//')
+        [ -z "$model" ] && model="Unknown"
+        menu="$menu $dev \"$size  $model\""
+    done
+
+    [ -n "$menu" ] || die "No disks found on this system."
+
+    eval dialog \
+        --title "\"$title\"" \
+        --backtitle "\"Forge Linux 1.0\"" \
+        --menu "\"$prompt\"" \
+        18 72 8 \
+        $menu \
+        3>&1 1>&2 2>&3
+}
+
+select_partition() {
+    title="$1"
+    prompt="$2"
+    kind="$3"
+    allow_none="${4:-0}"
+    menu=""
+
+    while read -r path size fstype label pkname; do
+        [ -n "$path" ] || continue
+        desc="$size  ${fstype:-unknown}"
+        [ -n "$label" ] && [ "$label" != "-" ] && desc="$desc  [$label]"
+        [ -n "$pkname" ] && [ "$pkname" != "-" ] && desc="$desc  on /dev/$pkname"
+
+        case "$kind" in
+            root)
+                case "$fstype" in
+                    ext2|ext3|ext4) menu="$menu $path \"$desc\"" ;;
+                esac
+                ;;
+            efi)
+                case "$fstype" in
+                    vfat|fat|fat32|msdos) menu="$menu $path \"$desc\"" ;;
+                esac
+                ;;
+        esac
+    done << EOF
+$(lsblk -rpn -o PATH,SIZE,FSTYPE,LABEL,PKNAME,TYPE 2>/dev/null | awk '$6=="part"{print $1, $2, $3, ($4=="" ? "-" : $4), ($5=="" ? "-" : $5)}')
+EOF
+
+    if [ "$allow_none" = "1" ]; then
+        menu="none \"Skip this step / BIOS only\" $menu"
+    fi
+
+    [ -n "$menu" ] || die "No matching partitions found for this step."
+
+    eval dialog \
+        --title "\"$title\"" \
+        --backtitle "\"Forge Linux 1.0\"" \
+        --menu "\"$prompt\"" \
+        20 78 10 \
+        $menu \
+        3>&1 1>&2 2>&3
+}
+
+ask_hostname() {
+    value=$(dialog \
+        --title "Hostname" \
+        --backtitle "Forge Linux 1.0" \
+        --inputbox "\nEnter hostname for the installed system." \
+        10 60 "$HOSTNAME_VALUE" \
+        3>&1 1>&2 2>&3) || return 1
+
+    case "$value" in
+        ""|*[!A-Za-z0-9._-]*)
+            die "Hostname may only contain letters, numbers, dot, dash, and underscore."
+            ;;
+    esac
+
+    HOSTNAME_VALUE="$value"
+}
+
+ask_username() {
+    value=$(dialog \
+        --title "User Account" \
+        --backtitle "Forge Linux 1.0" \
+        --inputbox "\nEnter the main login name for the installed system." \
+        10 60 "$USERNAME_VALUE" \
+        3>&1 1>&2 2>&3) || return 1
+
+    case "$value" in
+        root|"")
+            die "Choose a non-empty username other than root."
+            ;;
+        *[!a-z0-9_-]*)
+            die "Username may only contain lowercase letters, numbers, dash, and underscore."
+            ;;
+    esac
+
+    USERNAME_VALUE="$value"
+}
+
+ask_passwords() {
+    pass1=$(dialog \
+        --title "Account Password" \
+        --backtitle "Forge Linux 1.0" \
+        --insecure \
+        --passwordbox "\nEnter a password for $USERNAME_VALUE.\nThe same password will also be set for root." \
+        11 70 \
+        3>&1 1>&2 2>&3) || return 1
+
+    pass2=$(dialog \
+        --title "Confirm Password" \
+        --backtitle "Forge Linux 1.0" \
+        --insecure \
+        --passwordbox "\nRe-enter the password for $USERNAME_VALUE." \
+        10 70 \
+        3>&1 1>&2 2>&3) || return 1
+
+    [ -n "$pass1" ] || die "Password may not be empty."
+    [ "$pass1" = "$pass2" ] || die "Passwords do not match."
+    PASSWORD_VALUE="$pass1"
+}
+
+ask_install_mode() {
+    INSTALL_MODE=$(dialog \
+        --title "Install Mode" \
+        --backtitle "Forge Linux 1.0" \
+        --menu "\nChoose how Forge Linux should be installed." \
+        15 72 6 \
+        erase "Erase whole disk and create BIOS+UEFI layout" \
+        existing "Use existing partitions and keep other OS data" \
+        3>&1 1>&2 2>&3) || return 1
+}
+
+choose_existing_layout() {
+    ROOT_PART=$(select_partition \
+        "Root Partition" \
+        "\nChoose an existing Linux partition for /.\nOnly ext2/ext3/ext4 are supported right now." \
+        root) || return 1
+    ROOT_FS_TYPE=$(lsblk -nro FSTYPE "$ROOT_PART" 2>/dev/null | head -n 1)
+
+    dialog --title "Format Root Partition" \
+        --backtitle "Forge Linux 1.0" \
+        --yesno "\nFormat $ROOT_PART as ext4 before installation?\n\nYes: safest when using a dedicated empty partition.\nNo: files will be overwritten in place on the existing filesystem." \
+        13 72
+    if [ $? -eq 0 ]; then
+        FORMAT_ROOT=1
+    else
+        FORMAT_ROOT=0
+    fi
+
+    EFI_PART=$(select_partition \
+        "EFI Partition" \
+        "\nChoose an existing EFI System Partition.\nPick 'none' only if you want BIOS-only boot." \
+        efi 1) || return 1
+    [ "$EFI_PART" = "none" ] && EFI_PART=""
+
+    ROOT_PARENT=$(lsblk -nro PKNAME "$ROOT_PART" 2>/dev/null | head -n 1)
+    [ -n "$ROOT_PARENT" ] || die "Could not determine which disk owns $ROOT_PART."
+
+    BOOT_DISK="/dev/$(select_disk \
+        "Boot Disk" \
+        "\nChoose the disk where BIOS GRUB should be installed.\nUsually this is the disk that contains $ROOT_PART." )" || return 1
+}
+
+choose_erase_layout() {
+    DISK=$(select_disk \
+        "Select Target Disk" \
+        "\nChoose the disk to install Forge Linux on.\nAll data on that disk will be erased." ) || return 1
+    [ -n "$DISK" ] || return 1
+
+    DISK_SIZE=$(lsblk -d -n -o SIZE "/dev/$DISK" 2>/dev/null)
+    DISK_MODEL=$(lsblk -d -n -o MODEL "/dev/$DISK" 2>/dev/null | sed 's/[[:space:]]*$//')
+
+    dialog --title "Confirm Whole-Disk Install" \
+        --backtitle "Forge Linux 1.0" \
+        --defaultno \
+        --yesno "\n  Disk:   /dev/$DISK\n  Size:   $DISK_SIZE\n  Model:  $DISK_MODEL\n\nForge Linux will erase this entire disk and create new BIOS + UEFI boot partitions.\n\nContinue?" \
+        15 72
+    [ $? -eq 0 ] || return 1
+
+    BIOS_PART=$(part_path 1)
+    EFI_PART=$(part_path 2)
+    ROOT_PART=$(part_path 3)
+    BOOT_DISK="/dev/$DISK"
+    FORMAT_ROOT=1
+    ROOT_FS_TYPE="ext4"
+
+    calc_layout || die "Target disk is too small for installation."
+}
+
+configure_accounts() {
+    target="$1"
+
+    mkdir -p "$target/etc" "$target/home" "$target/root"
+    [ -f "$target/etc/group" ] || printf 'root:x:0:\n' > "$target/etc/group"
+    [ -f "$target/etc/shadow" ] || printf 'root::19000:0:99999:7:::\n' > "$target/etc/shadow"
+    chmod 600 "$target/etc/shadow" 2>/dev/null || true
+
+    printf '%s\n' "$HOSTNAME_VALUE" > "$target/etc/hostname"
+
+    HOME=/root /bin/busybox chroot "$target" /bin/busybox adduser -D -h "/home/$USERNAME_VALUE" -s /bin/sh "$USERNAME_VALUE" >/dev/null 2>&1 || {
+        echo "ERROR: Failed to create user $USERNAME_VALUE" > "$TMPDIR/error"
+        return 1
+    }
+
+    printf 'root:%s\n%s:%s\n' "$PASSWORD_VALUE" "$USERNAME_VALUE" "$PASSWORD_VALUE" | \
+        /bin/busybox chpasswd -c sha512 -R "$target" >/dev/null 2>&1 || {
+        echo "ERROR: Failed to set account passwords" > "$TMPDIR/error"
+        return 1
+    }
+
+    cat > "$target/etc/issue" << EOF
+Forge Linux
+
+Login with:
+  user: $USERNAME_VALUE
+  or:   root
+EOF
+}
+
+write_grub_cfg() {
+    root_uuid="$1"
+
+    cat > /mnt/nibroot/boot/grub/grub.cfg << GRUBEOF
+set default=0
+set timeout=5
+
+insmod part_gpt
+insmod part_msdos
+insmod fat
+insmod ext2
+insmod linux
+
+terminal_input console
+terminal_output console
+
+menuentry "Forge Linux" {
+    search --no-floppy --fs-uuid --set=root $root_uuid
+    linux /boot/vmlinuz root=UUID=$root_uuid rw rootwait init=/init console=tty0 loglevel=4 printk.time=1 consoleblank=0
+}
+
+menuentry "Forge Linux (nomodeset)" {
+    search --no-floppy --fs-uuid --set=root $root_uuid
+    linux /boot/vmlinuz root=UUID=$root_uuid rw rootwait init=/init nomodeset console=tty0 loglevel=7 printk.time=1 consoleblank=0
+}
+
+menuentry "Forge Linux (rescue)" {
+    search --no-floppy --fs-uuid --set=root $root_uuid
+    linux /boot/vmlinuz root=UUID=$root_uuid rw rootwait init=/init nib.rescue=1 console=tty0 loglevel=7 printk.time=1 consoleblank=0
+}
+
+menuentry "Forge Linux (debug)" {
+    search --no-floppy --fs-uuid --set=root $root_uuid
+    linux /boot/vmlinuz root=UUID=$root_uuid rw rootwait init=/init nib.debug=1 console=tty0 loglevel=7 ignore_loglevel printk.time=1 consoleblank=0
+}
+GRUBEOF
+}
+
+write_fstab() {
+    root_uuid="$1"
+    efi_uuid="$2"
+
+    {
+        printf 'UUID=%s  /         %s  defaults,noatime  0 1\n' "$root_uuid" "$ROOT_FS_TYPE"
+        if [ -n "$efi_uuid" ]; then
+            printf 'UUID=%s  /boot/efi vfat  defaults          0 2\n' "$efi_uuid"
+        fi
+        printf 'tmpfs            /tmp      tmpfs defaults,nosuid   0 0\n'
+        printf 'tmpfs            /run      tmpfs defaults,nosuid   0 0\n'
+    } > /mnt/nibroot/etc/fstab
+}
+
 if [ "$(id -u)" != "0" ]; then
     dialog --title "Forge Linux Installer" --msgbox "\nThis installer must be run as root." 7 47
     clear
@@ -89,50 +376,37 @@ fi
 
 dialog --title "Forge Linux Installer" \
     --backtitle "Forge Linux 1.0" \
-    --yesno "\nWelcome to the Forge Linux installer.\n\nThis will install Forge Linux to a disk on this machine.\n\nThe installer now prepares the disk for both UEFI and Legacy BIOS boot.\n\nAll data on the selected disk will be ERASED.\n\nContinue?" \
-    15 60
+    --yesno "\nWelcome to the Forge Linux installer.\n\nYou can either erase a full disk or install into an existing Linux partition while keeping other operating systems intact.\n\nContinue?" \
+    13 72
 [ $? -eq 0 ] || { clear; exit 0; }
 
-DISK_LIST=""
-for dev in $(lsblk -d -n -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
-    SIZE=$(lsblk -d -n -o SIZE "/dev/$dev" 2>/dev/null)
-    MODEL=$(lsblk -d -n -o MODEL "/dev/$dev" 2>/dev/null | sed 's/[[:space:]]*$//')
-    [ -z "$MODEL" ] && MODEL="Unknown"
-    DISK_LIST="$DISK_LIST $dev \"$SIZE  $MODEL\""
-done
+ask_install_mode || { clear; exit 0; }
 
-if [ -z "$DISK_LIST" ]; then
-    die "No disks found on this system."
-fi
+case "$INSTALL_MODE" in
+    erase) choose_erase_layout || { clear; exit 0; } ;;
+    existing) choose_existing_layout || { clear; exit 0; } ;;
+    *) die "Unknown install mode: $INSTALL_MODE" ;;
+esac
 
-DISK=$(eval dialog \
-    --title \"Select Target Disk\" \
-    --backtitle \"Forge Linux 1.0\" \
-    --menu \"\nChoose the disk to install Forge Linux on.\nAll data will be erased.\" \
-    16 60 6 \
-    $DISK_LIST \
-    3>&1 1>&2 2>&3)
+ask_hostname || { clear; exit 0; }
+ask_username || { clear; exit 0; }
+ask_passwords || { clear; exit 0; }
 
-[ $? -eq 0 ] || { clear; exit 0; }
-[ -z "$DISK" ] && { clear; exit 0; }
-
-DISK_SIZE=$(lsblk -d -n -o SIZE "/dev/$DISK" 2>/dev/null)
-DISK_MODEL=$(lsblk -d -n -o MODEL "/dev/$DISK" 2>/dev/null | sed 's/[[:space:]]*$//')
+SUMMARY_BOOT="$BOOT_DISK"
+[ -z "$SUMMARY_BOOT" ] && SUMMARY_BOOT="(none)"
+SUMMARY_EFI="$EFI_PART"
+[ -z "$SUMMARY_EFI" ] && SUMMARY_EFI="BIOS only"
+SUMMARY_FORMAT="yes"
+[ "$FORMAT_ROOT" -eq 0 ] && SUMMARY_FORMAT="no"
 
 dialog --title "Confirm Installation" \
     --backtitle "Forge Linux 1.0" \
     --defaultno \
-    --yesno "\n  Disk:   /dev/$DISK\n  Size:   $DISK_SIZE\n  Model:  $DISK_MODEL\n\n  Boot mode prepared: UEFI + Legacy BIOS\n\n  WARNING: ALL DATA WILL BE PERMANENTLY ERASED.\n\nAre you sure you want to continue?" \
-    15 60
+    --yesno "\nInstall mode:   $INSTALL_MODE\nRoot partition: $ROOT_PART\nFormat root:    $SUMMARY_FORMAT\nEFI partition:  $SUMMARY_EFI\nBoot disk:      $SUMMARY_BOOT\nHostname:       $HOSTNAME_VALUE\nUser:           $USERNAME_VALUE\n\nProceed with installation?" \
+    17 72
 [ $? -eq 0 ] || { clear; exit 0; }
 
-BIOS_PART=$(part_path 1)
-EFI_PART=$(part_path 2)
-ROOT_PART=$(part_path 3)
-
-calc_layout || die "Target disk is too small for installation."
-
-STEPS=8
+STEPS=10
 step() {
     STEP_N=$1
     STEP_MSG=$2
@@ -144,31 +418,50 @@ step() {
 }
 
 (
-step 1 "Partitioning disk for BIOS and UEFI boot..."
-wipefs -a "/dev/$DISK" > /dev/null 2>&1 || true
-sfdisk "/dev/$DISK" > /dev/null 2>&1 << SFDISK_END
+if [ "$INSTALL_MODE" = "erase" ]; then
+    step 1 "Partitioning disk for BIOS and UEFI boot..."
+    wipefs -a "/dev/$DISK" > /dev/null 2>&1 || true
+    sfdisk "/dev/$DISK" > /dev/null 2>&1 << SFDISK_END
 label: gpt
 start=$BIOS_START, size=$BIOS_SIZE, type=21686148-6449-6E6F-744E-656564454649, name="BIOSBOOT"
 start=$EFI_START,  size=$EFI_SIZE,  type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
 start=$ROOT_START,                 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="ForgeLinux"
 SFDISK_END
-sleep 1
-partprobe "/dev/$DISK" 2>/dev/null || true
-sleep 2
+    sleep 1
+    partprobe "/dev/$DISK" 2>/dev/null || true
+    sleep 2
+else
+    step 1 "Validating selected partitions..."
+    [ -b "$ROOT_PART" ] || {
+        echo "ERROR: Root partition $ROOT_PART does not exist" > "$TMPDIR/error"
+        echo "100"
+        exit 1
+    }
+    if [ -n "$EFI_PART" ] && [ ! -b "$EFI_PART" ]; then
+        echo "ERROR: EFI partition $EFI_PART does not exist" > "$TMPDIR/error"
+        echo "100"
+        exit 1
+    fi
+fi
 
-step 2 "Formatting EFI partition..."
-mkfs.fat -F32 -n "FORGEEFI" "$EFI_PART" > /dev/null 2>&1 || {
-    echo "ERROR: Failed to format EFI partition $EFI_PART" > "$TMPDIR/error"
-    echo "100"
-    exit 1
-}
+step 2 "Preparing root filesystem..."
+if [ "$FORMAT_ROOT" -eq 1 ]; then
+    mkfs.ext4 -L "ForgeLinux" -F "$ROOT_PART" > /dev/null 2>&1 || {
+        echo "ERROR: Failed to format root partition $ROOT_PART" > "$TMPDIR/error"
+        echo "100"
+        exit 1
+    }
+    ROOT_FS_TYPE="ext4"
+fi
 
-step 3 "Formatting root partition..."
-mkfs.ext4 -L "ForgeLinux" -F "$ROOT_PART" > /dev/null 2>&1 || {
-    echo "ERROR: Failed to format root partition $ROOT_PART" > "$TMPDIR/error"
-    echo "100"
-    exit 1
-}
+step 3 "Preparing EFI partition..."
+if [ -n "$EFI_PART" ] && [ "$INSTALL_MODE" = "erase" ]; then
+    mkfs.fat -F32 -n "FORGEEFI" "$EFI_PART" > /dev/null 2>&1 || {
+        echo "ERROR: Failed to format EFI partition $EFI_PART" > "$TMPDIR/error"
+        echo "100"
+        exit 1
+    }
+fi
 
 step 4 "Mounting target filesystem..."
 mkdir -p /mnt/nibroot
@@ -177,12 +470,15 @@ mount "$ROOT_PART" /mnt/nibroot || {
     echo "100"
     exit 1
 }
-mkdir -p /mnt/nibroot/boot/efi
-mount "$EFI_PART" /mnt/nibroot/boot/efi || {
-    echo "ERROR: Failed to mount EFI partition $EFI_PART" > "$TMPDIR/error"
-    echo "100"
-    exit 1
-}
+mkdir -p /mnt/nibroot/boot
+if [ -n "$EFI_PART" ]; then
+    mkdir -p /mnt/nibroot/boot/efi
+    mount "$EFI_PART" /mnt/nibroot/boot/efi || {
+        echo "ERROR: Failed to mount EFI partition $EFI_PART" > "$TMPDIR/error"
+        echo "100"
+        exit 1
+    }
+fi
 
 step 5 "Locating installation media..."
 ISO_DEV=$(find_install_media)
@@ -198,6 +494,7 @@ tar -xzf /mnt/iso/boot/rootfs.tar.gz -C /mnt/nibroot 2>/dev/null || {
     echo "100"
     exit 1
 }
+mkdir -p /mnt/nibroot/boot
 cp /mnt/iso/boot/vmlinuz /mnt/nibroot/boot/vmlinuz || {
     echo "ERROR: Failed to copy kernel from installation media" > "$TMPDIR/error"
     echo "100"
@@ -206,62 +503,38 @@ cp /mnt/iso/boot/vmlinuz /mnt/nibroot/boot/vmlinuz || {
 umount /mnt/iso 2>/dev/null || true
 rmdir /mnt/iso 2>/dev/null || true
 
-step 7 "Installing bootloader..."
+step 7 "Configuring accounts..."
+configure_accounts /mnt/nibroot || {
+    echo "100"
+    exit 1
+}
+
+step 8 "Writing boot configuration..."
 mkdir -p /mnt/nibroot/boot/grub
-
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
-EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+EFI_UUID=""
+[ -n "$EFI_PART" ] && EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+write_grub_cfg "$ROOT_UUID"
+write_fstab "$ROOT_UUID" "$EFI_UUID"
 
-cat > /mnt/nibroot/boot/grub/grub.cfg << GRUBEOF
-set default=0
-set timeout=3
-
-insmod part_gpt
-insmod part_msdos
-insmod fat
-insmod ext2
-insmod linux
-
-terminal_input console
-terminal_output console
-
-menuentry "Forge Linux" {
-    search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait quiet init=/init console=tty0
-}
-
-menuentry "Forge Linux (nomodeset)" {
-    search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait quiet nomodeset init=/init console=tty0
-}
-
-menuentry "Forge Linux (safe mode)" {
-    search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=UUID=$ROOT_UUID rw rootwait init=/bin/sh console=tty0
-}
-GRUBEOF
-
-cat > /mnt/nibroot/etc/fstab << FSTABEOF
-UUID=$ROOT_UUID  /         ext4  defaults,noatime  0 1
-UUID=$EFI_UUID   /boot/efi vfat  defaults          0 2
-tmpfs            /tmp      tmpfs defaults,nosuid   0 0
-tmpfs            /run      tmpfs defaults,nosuid   0 0
-FSTABEOF
-
+step 9 "Installing bootloader..."
 UEFI_OK=0
 BIOS_OK=0
 
-mkdir -p /mnt/nibroot/boot/efi/EFI
-mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+if [ -n "$EFI_PART" ]; then
+    mkdir -p /mnt/nibroot/boot/efi/EFI
+    mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+    grub-install --target=x86_64-efi \
+        --efi-directory=/mnt/nibroot/boot/efi \
+        --boot-directory=/mnt/nibroot/boot \
+        --removable --no-nvram "${BOOT_DISK:-$ROOT_PART}" > "$TMPDIR/grub-efi.log" 2>&1 && UEFI_OK=1
+fi
 
-grub-install --target=x86_64-efi \
-    --efi-directory=/mnt/nibroot/boot/efi \
-    --boot-directory=/mnt/nibroot/boot \
-    --removable --no-nvram "/dev/$DISK" > "$TMPDIR/grub-efi.log" 2>&1 && UEFI_OK=1
-
-grub-install --target=i386-pc \
-    --boot-directory=/mnt/nibroot/boot \
-    "/dev/$DISK" > "$TMPDIR/grub-bios.log" 2>&1 && BIOS_OK=1
+if [ -n "$BOOT_DISK" ]; then
+    grub-install --target=i386-pc \
+        --boot-directory=/mnt/nibroot/boot \
+        "$BOOT_DISK" > "$TMPDIR/grub-bios.log" 2>&1 && BIOS_OK=1
+fi
 
 if [ "$UEFI_OK" -ne 1 ] && [ "$BIOS_OK" -ne 1 ]; then
     echo "ERROR: GRUB installation failed for both UEFI and BIOS." > "$TMPDIR/error"
@@ -269,7 +542,7 @@ if [ "$UEFI_OK" -ne 1 ] && [ "$BIOS_OK" -ne 1 ]; then
     exit 1
 fi
 
-step 8 "Finalizing installation..."
+step 10 "Finalizing installation..."
 rm -f /mnt/nibroot/usr/local/bin/nib-install /mnt/nibroot/bin/nib-install 2>/dev/null || true
 sync
 umount /mnt/nibroot/boot/efi 2>/dev/null || true
@@ -279,8 +552,8 @@ echo "100"
 ) | dialog \
     --title "Installing Forge Linux" \
     --backtitle "Forge Linux 1.0" \
-    --gauge "\nInstalling Forge Linux to /dev/$DISK...\n" \
-    10 60 0
+    --gauge "\nInstalling Forge Linux...\n" \
+    10 70 0
 
 if [ -f "$TMPDIR/error" ]; then
     EXTRA=""
@@ -292,7 +565,7 @@ fi
 
 dialog --title "Installation Complete" \
     --backtitle "Forge Linux 1.0" \
-    --msgbox "\nForge Linux has been installed to /dev/$DISK.\n\nSupported boot paths prepared:\n- UEFI removable boot\n- Legacy BIOS boot\n\nRemove the installation media and reboot." \
-    13 60
+    --msgbox "\nForge Linux has been installed.\n\nLogin:\n  user: $USERNAME_VALUE\n  root: same password as the user account\n\nRemove the installation media and reboot." \
+    14 72
 
 clear

@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+export HOME=/root
+export USER=root
+export LOGNAME=root
+export XDG_RUNTIME_DIR=/run/user/0
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+if command -v dbus-launch >/dev/null 2>&1; then
+    eval "$(dbus-launch --sh-syntax --exit-with-session)"
+fi
+
+if command -v openbox >/dev/null 2>&1; then
+    openbox >/tmp/openbox.log 2>&1 &
+fi
+
+if command -v calamares >/dev/null 2>&1; then
+    exec calamares
+fi
+
+if command -v xterm >/dev/null 2>&1; then
+    exec xterm -fa Monospace -fs 12 -e /usr/local/bin/nib-install
+fi
+
+exec /usr/local/bin/nib-install

@@ -34,6 +34,8 @@ Important paths:
 - `rootfs/bin/ns`: simple package fetch tool
 - `distro-kit/`: next-generation package system work
 
+- `tools/bootstrap_calamares_rootfs.sh`: host-side bootstrap for a future `Calamares` GUI installer
+
 ## Features
 
 - boots from ISO via `GRUB`
@@ -64,7 +66,7 @@ After boot:
 ```sh
 wifi-connect --scan
 wifi-connect <SSID> [password]
-nib-install
+start-installer
 ns install <package>
 ```
 

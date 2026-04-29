@@ -19,19 +19,6 @@ panic_shell() {
     exec /bin/sh -i </dev/console >/dev/console 2>&1
 }
 
-spawn_tty_shell() {
-    tty_dev="$1"
-    if [ ! -c "$tty_dev" ]; then
-        return 1
-    fi
-
-    if command -v cttyhack >/dev/null 2>&1; then
-        setsid cttyhack /bin/sh -i <"$tty_dev" >"$tty_dev" 2>&1
-    else
-        setsid /bin/sh -i <"$tty_dev" >"$tty_dev" 2>&1
-    fi
-}
-
 log() {
     echo "[nib-init] $*"
 }
@@ -101,7 +88,7 @@ if [ "$LIVE" = "1" ]; then
     echo "Commands:"
     echo "  wifi-connect <SSID> [pass]   connect to WiFi"
     echo "  wifi-connect --scan          scan networks"
-    echo "  nib-install                  install to disk"
+    echo "  start-installer              launch installer"
     echo "  ns install <pkg>             install package"
     echo
 
@@ -127,9 +114,9 @@ if [ "$NIB_DEBUG" = "1" ]; then
 fi
 
 if [ "$LIVE" = "1" ]; then
-    log "starting live shells on tty2-tty4"
+    log "starting live autologin consoles on tty2-tty4"
     for tty in 2 3 4; do
-        spawn_tty_shell "/dev/tty$tty" &
+        setsid /sbin/getty -n -l /usr/local/bin/live-login-root -L 115200 "tty$tty" vt100 </dev/null >/dev/null 2>&1 &
     done
     exec /bin/sh -i </dev/console >/dev/console 2>&1
 else

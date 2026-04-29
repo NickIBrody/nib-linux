@@ -1,0 +1,14 @@
+calamares
+calamares-settings-debian
+openbox
+xinit
+xterm
+dbus-x11
+xauth
+x11-utils
+x11-xserver-utils
+x11-xkb-utils
+xfonts-base
+xserver-xorg-core
+xserver-xorg-input-all
+xserver-xorg-video-all

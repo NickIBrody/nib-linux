@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if command -v calamares >/dev/null 2>&1 && command -v startx >/dev/null 2>&1; then
+    exec startx /usr/local/bin/start-live-gui -- :0 vt1
+fi
+
+if command -v nib-install >/dev/null 2>&1; then
+    exec /usr/local/bin/nib-install
+fi
+
+echo "No installer is available in this live image." >&2
+exit 1
