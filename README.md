@@ -34,7 +34,6 @@ Important paths:
 - `rootfs/bin/ns`: simple package fetch tool
 - `distro-kit/`: next-generation package system work
 
-- `tools/bootstrap_calamares_rootfs.sh`: host-side bootstrap for a future `Calamares` GUI installer
 
 ## Features
 
