@@ -1,66 +1,48 @@
 # Forge Linux
 
-Forge Linux is a custom Linux distribution project built around a small live ISO, a shell-driven initramfs environment, and a simple disk installer for real hardware.
+Forge Linux is a small custom Linux distribution project focused on a bootable live ISO, a shell-first recovery environment, and a simple installer for real hardware.
 
-Current state:
+## What It Includes
 
-- custom Linux 6.12 kernel flow
-- live ISO with `GRUB`
-- installer with `UEFI + BIOS` target layout support
-- Wi-Fi helper commands in the live system
-- experimental package tooling:
-  - `ns` shell package fetcher
-  - `distro-kit/ns-core` Rust backend
-  - `distro-kit/ns` Ruby frontend and recipe DSL
+- custom Linux `6.12` build flow
+- live ISO booted with `GRUB`
+- installer with `UEFI` and `BIOS` support
+- live Wi-Fi helper commands
+- experimental package tooling built around `ns`
 
 ## Repository Layout
 
 ```text
 .
 ├── build_nib.sh
+├── build_wpa.sh
 ├── configs/
 ├── distro-kit/
 ├── get_firmware.sh
-├── build_wpa.sh
 ├── rootfs/
-└── screenshots/
+├── screenshots/
+└── tools/
 ```
 
-Important paths:
+Key paths:
 
-- `rootfs/init`: live and installed init entrypoint
-- `rootfs/usr/local/bin/nib-install`: TUI installer
-- `rootfs/usr/local/bin/wifi-connect`: Wi-Fi helper
-- `rootfs/bin/ns`: simple package fetch tool
-- `distro-kit/`: next-generation package system work
+- `rootfs/init`: init entrypoint for the live environment and installed system
+- `rootfs/usr/local/bin/nib-install`: text installer
+- `rootfs/usr/local/bin/wifi-connect`: live Wi-Fi helper
+- `rootfs/bin/ns`: current shell package manager
+- `distro-kit/ns-core`: Rust backend for package tooling
+- `distro-kit/ns`: Ruby frontend and recipe workflow
 
+## Boot Flow
 
-## Features
+The ISO boots into a minimal live system with:
 
-- boots from ISO via `GRUB`
-- live shell environment
-- disk installer with:
-  - target disk selection
-  - adaptive `EFI` sizing for smaller disks
-  - `UEFI` removable boot install
-  - `Legacy BIOS` install path
-- Wi-Fi helper commands
-- package system experiments in `Rust` and `Ruby`
+- shell access on the console
+- network helpers for wired and Wi-Fi setup
+- `start-installer` for launching the installer
+- `ns` for fetching packages in the live environment
 
-## Build Notes
-
-The current builder expects a local workspace like `/home/brody/nib-build` with:
-
-- kernel source and built `bzImage`
-- prepared `rootfs_work`
-- `iso_root`
-- required userspace tools available on the host
-
-This repo tracks the project source and scripts. The published ISO is attached to GitHub Releases rather than committed to git.
-
-## Live Commands
-
-After boot:
+Typical live commands:
 
 ```sh
 wifi-connect --scan
@@ -69,36 +51,45 @@ start-installer
 ns install <package>
 ```
 
-## Package Work
+## Build Notes
 
-`distro-kit/` is the new packaging direction:
+The current build script assumes a local workspace like `/home/brody/nib-build` and expects:
 
-- low-level backend in `Rust`
-- high-level CLI and recipes in `Ruby`
-- bootstrap recipes for:
-  - `python`
-  - `rustup`
-  - `rust`
-  - `chawan`
-  - `openssl`
-  - `zlib`
-  - `sqlite`
-  - `readline`
-  - `ncurses`
-  - `libffi`
+- a built kernel image at the configured path
+- prepared `rootfs_work`
+- prepared `iso_root`
+- host tools such as `cpio`, `gzip`, and `grub-mkrescue`
 
-## Release Artifact
+Main builder:
 
-Latest ISO built in this update:
+```sh
+./build_nib.sh
+```
 
-- `nib-linux.iso`
-- size: about `253 MB`
+Related helpers:
 
-## Caveats
+- `build_wpa.sh`: Wi-Fi userspace build helper
+- `get_firmware.sh`: firmware fetch helper
+- `tools/bootstrap_calamares_rootfs.sh`: bootstrap helper for a Calamares-based rootfs experiment
 
-- `python3` is not yet included in the live rootfs by default
-- `micropython` exists in the package repo, but full CPython packaging is still in progress
-- `UEFI` install path is in better shape than `Legacy BIOS`
+## Package Tooling
+
+The current package manager is still `ns`. The distro branding changed to Forge Linux, but the package tooling name did not.
+
+Current pieces:
+
+- `rootfs/bin/ns`: lightweight shell package installer used in the live system
+- `distro-kit/ns-core`: low-level package backend written in Rust
+- `distro-kit/ns`: higher-level Ruby frontend for recipes and repository operations
+
+This means distro renaming does not break package management unless the `ns` command, its paths, or its package repository are renamed too.
+
+## Current State
+
+- `UEFI` install flow is in better shape than legacy `BIOS`
+- package tooling is functional but still experimental
+- full `CPython` packaging is still in progress
+- release ISOs are published as artifacts, not committed to git
 
 ## License
 
